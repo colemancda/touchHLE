@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #import <Foundation/Foundation.h>
+#import <GameController/GameController.h>
 
 // Each emulator core exports this; the host passes in the one belonging to the
 // core it loaded for this game.
@@ -134,6 +135,40 @@ void touchhle_ios_log_jit_status(const char *context) {
     );
 }
 
+// What iOS itself reports, independent of SDL: tells a controller the system
+// never gives the app apart from one SDL fails to pick up.
+static void touchhle_ios_log_controllers(const char *context) {
+    NSArray<GCController *> *controllers = [GCController controllers];
+    fprintf(stderr, "touchHLE controllers [%s]: %lu\n", context,
+            (unsigned long)controllers.count);
+    for (GCController *controller in controllers) {
+        fprintf(stderr, "- %s (%s) extended=%d\n",
+                controller.vendorName.UTF8String ?: "?",
+                controller.productCategory.UTF8String ?: "?",
+                controller.extendedGamepad != nil);
+    }
+}
+
+static void touchhle_ios_observe_controllers(void) {
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserverForName:GCControllerDidConnectNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification *note) {
+        GCController *controller = note.object;
+        fprintf(stderr, "touchHLE controller connected: %s\n",
+                controller.vendorName.UTF8String ?: "?");
+    }];
+    [center addObserverForName:GCControllerDidDisconnectNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification *note) {
+        GCController *controller = note.object;
+        fprintf(stderr, "touchHLE controller disconnected: %s\n",
+                controller.vendorName.UTF8String ?: "?");
+    }];
+}
+
 static FILE *diagnostic_log;
 
 static void redirect_diagnostics(void) {
@@ -208,6 +243,7 @@ int32_t touchhle_ios_launch_game(
     // Breadcrumbs: the emulator runs on the main thread, so if it hangs the UI
     // freezes with it and the log is the only way to see how far it got.
     touchhle_ios_log_jit_status("game-launch");
+    touchhle_ios_log_controllers("game-launch");
     fprintf(
         stderr,
         "touchHLE: entering emulator: scale_hack=%d orientation=%s network=%d "
@@ -239,6 +275,8 @@ int main(int argc, char *argv[]) {
 
     redirect_diagnostics();
     touchhle_ios_log_jit_status("launch");
+    touchhle_ios_observe_controllers();
+    touchhle_ios_log_controllers("launch");
 
     char *base_path = SDL_GetBasePath();
     if (base_path != NULL) {
