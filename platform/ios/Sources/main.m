@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #import <Foundation/Foundation.h>
+#import <AVFoundation/AVFoundation.h>
 #import <GameController/GameController.h>
 
 // Each emulator core exports this; the host passes in the one belonging to the
@@ -169,6 +170,22 @@ static void touchhle_ios_observe_controllers(void) {
     }];
 }
 
+// Without a configured session iOS uses SoloAmbient, which is silenced by the
+// Ring/Silent switch; games are expected to be heard regardless.
+static void touchhle_ios_configure_audio(void) {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+    if (![session setCategory:AVAudioSessionCategoryPlayback error:&error]) {
+        fprintf(stderr, "touchHLE audio: setCategory failed: %s\n",
+                error.localizedDescription.UTF8String ?: "?");
+    }
+    error = nil;
+    if (![session setActive:YES error:&error]) {
+        fprintf(stderr, "touchHLE audio: setActive failed: %s\n",
+                error.localizedDescription.UTF8String ?: "?");
+    }
+}
+
 static FILE *diagnostic_log;
 
 static void redirect_diagnostics(void) {
@@ -276,6 +293,7 @@ int main(int argc, char *argv[]) {
     redirect_diagnostics();
     touchhle_ios_log_jit_status("launch");
     touchhle_ios_observe_controllers();
+    touchhle_ios_configure_audio();
     touchhle_ios_log_controllers("launch");
 
     char *base_path = SDL_GetBasePath();
