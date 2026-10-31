@@ -1441,6 +1441,42 @@ pub fn open_url(env: &mut Environment, url: &str) -> Result<(), String> {
     env.on_parent_stack_in_coroutine(|_, _| sdl2::url::open_url(url).map_err(|e| e.to_string()))
 }
 
+/// Local patch: show a modal SDL messagebox for an app's alert (UIAlertView)
+/// and return the index of the button clicked, or `None` if it was closed.
+pub fn show_alert_messagebox(
+    window: Option<&Window>,
+    title: &str,
+    message: &str,
+    buttons: &[String],
+) -> Option<usize> {
+    use sdl2::messagebox;
+    let buttons: Vec<_> = if buttons.is_empty() {
+        vec!["OK".to_string()]
+    } else {
+        buttons.to_vec()
+    };
+    let data: Vec<messagebox::ButtonData> = buttons
+        .iter()
+        .enumerate()
+        .map(|(i, text)| messagebox::ButtonData {
+            flags: messagebox::MessageBoxButtonFlag::NOTHING,
+            button_id: i as i32,
+            text,
+        })
+        .collect();
+    match messagebox::show_message_box(
+        messagebox::MessageBoxFlag::INFORMATION,
+        &data,
+        title,
+        message,
+        window.map(|win| &win.window),
+        None,
+    ) {
+        Ok(messagebox::ClickedButton::CustomButton(button)) => Some(button.button_id as usize),
+        _ => None,
+    }
+}
+
 /// Show an SDL messagebox for an error (typically after a panic).
 ///
 /// The window argument allows for passing in the parent window for the

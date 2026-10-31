@@ -79,6 +79,27 @@ fn CFNumberGetValue(
     type_: CFNumberType,
     value_ptr: MutVoidPtr,
 ) -> bool {
+    // Local patch: real CoreFoundation doesn't validate `num` in release
+    // builds; apps may pass other CF objects (e.g. CFData) and just get a
+    // failed conversion. Report a zero value and failure instead of crashing.
+    let ns_number_class = env.objc.get_known_class("NSNumber", &mut env.mem);
+    let num_class: crate::objc::Class = msg![env; num class];
+    if !env.objc.class_is_subclass_of(num_class, ns_number_class) {
+        log!(
+            "CFNumberGetValue: {:?} ({}) is not a CFNumber, returning 0 / false",
+            num,
+            env.objc.get_class_name(num_class)
+        );
+        let size = match type_ {
+            kCFNumberSInt8Type | kCFNumberCharType => 1,
+            kCFNumberSInt16Type | kCFNumberShortType => 2,
+            _ => 4,
+        };
+        for i in 0..size {
+            env.mem.write(value_ptr.cast::<u8>() + i, 0u8);
+        }
+        return false;
+    }
     match type_ {
         kCFNumberSInt32Type | kCFNumberIntType => {
             let val: i32 = msg![env; num intValue];
@@ -115,6 +136,17 @@ fn CFNumberCompare(
 }
 
 fn CFBooleanGetValue(env: &mut Environment, boolean: CFBooleanRef) -> bool {
+    // Local patch: as for CFNumberGetValue, a non-boolean reads as false.
+    let ns_number_class = env.objc.get_known_class("NSNumber", &mut env.mem);
+    let class: crate::objc::Class = msg![env; boolean class];
+    if !env.objc.class_is_subclass_of(class, ns_number_class) {
+        log!(
+            "CFBooleanGetValue: {:?} ({}) is not a CFBoolean, returning false",
+            boolean,
+            env.objc.get_class_name(class)
+        );
+        return false;
+    }
     msg![env; boolean boolValue]
 }
 

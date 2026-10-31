@@ -84,6 +84,17 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
+// Local patch: options are ignored; on failure (e.g. a web URL, as there is no
+// networking) nil is returned and no NSError is made.
++ (id)dataWithContentsOfURL:(id)url
+                    options:(NSUInteger)_options
+                      error:(MutPtr<id>)error {
+    if !error.is_null() {
+        env.mem.write(error, nil);
+    }
+    msg![env; this dataWithContentsOfURL:url]
+}
+
 + (id)dataWithData:(id)data {
     let new: id = msg![env; this alloc];
     let new: id = msg![env; new initWithData:data];
@@ -140,6 +151,16 @@ pub const CLASSES: ClassExports = objc_classes! {
         release(env, this);
         nil
     }
+}
+
+// Local patch: options are ignored and no NSError is made on failure.
+- (id)initWithContentsOfURL:(id)url // NSURL *
+                    options:(NSUInteger)_options
+                      error:(MutPtr<id>)error {
+    if !error.is_null() {
+        env.mem.write(error, nil);
+    }
+    msg![env; this initWithContentsOfURL:url]
 }
 
 - (id)initWithContentsOfFile:(id)path {

@@ -439,6 +439,20 @@ impl ClassHostObject {
     // See methods.rs for binary method parsing
 }
 
+/// Local patch: unimplemented system classes that get a fake (nil-behaving)
+/// class instead of panicking: tab bar parts, table views and MapKit.
+fn is_stubbed_system_class(name: &str) -> bool {
+    matches!(
+        name,
+        "UITabBar"
+            | "UITabBarItem"
+            | "UITableView"
+            | "UITableViewCell"
+            | "UITableViewCellContentView"
+            | "UIProgressView"
+    ) || name.starts_with("MK")
+}
+
 /// Decide whether a certain class/metaclass pair from the guest app should use
 /// fake class host objects and return the substitutions if so.
 ///
@@ -583,6 +597,19 @@ impl ObjC {
                     .unwrap_or(nil),
                 self,
             ));
+        } else if is_stubbed_system_class(name) {
+            // Local patch: system classes with no implementation that are
+            // better replaced by a fake (every message behaves as if sent to
+            // nil) than by a panic, so apps using them can at least start.
+            log!("Note: using a fake class for unimplemented system class {name}");
+            class_host_object = Box::new(FakeClass {
+                name: name.to_string(),
+                is_metaclass: false,
+            });
+            metaclass_host_object = Box::new(FakeClass {
+                name: name.to_string(),
+                is_metaclass: true,
+            });
         } else {
             if !use_placeholder {
                 panic!("Missing implementation for class {name}!");

@@ -39,6 +39,11 @@ impl Default for UIScrollViewHostObject {
     }
 }
 
+thread_local! {
+    /// Local patch: content insets per scroll view, keyed by object address.
+    static CONTENT_INSETS: std::cell::RefCell<std::collections::HashMap<u32, CGRect>> = Default::default();
+}
+
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
@@ -113,6 +118,22 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())setIndicatorStyle:(UIScrollViewIndicatorStyle)style {
     todo_objc_setter!(this, style);
 }
+
+// Local patch: scroll indicators aren't drawn, so there's nothing to flash.
+- (())flashScrollIndicators {}
+- (())setBouncesZoom:(bool)bounces {
+    todo_objc_setter!(this, bounces);
+}
+// Local patch: UIEdgeInsets is four floats (top, left, bottom, right), passed
+// exactly like a CGRect, so CGRect is used as its stand-in type here. Insets
+// are stored but don't affect layout or scrolling.
+- (())setContentInset:(CGRect)insets {
+    CONTENT_INSETS.with(|c| c.borrow_mut().insert(this.to_bits(), insets));
+}
+- (CGRect)contentInset {
+    CONTENT_INSETS.with(|c| c.borrow().get(&this.to_bits()).copied()).unwrap_or_default()
+}
+- (())setScrollIndicatorInsets:(CGRect)_insets {}
 
 - (())touchesMoved:(id)touches // NSSet* of UITouch*
          withEvent:(id)_event { // UIEvent*

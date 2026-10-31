@@ -54,7 +54,22 @@ fn CFArrayRemoveValueAtIndex(env: &mut Environment, array: CFMutableArrayRef, id
     msg![env; array removeObjectAtIndex:idx]
 }
 
+// Local patch
+fn CFArrayGetValues(
+    env: &mut Environment,
+    array: CFArrayRef,
+    range: super::CFRange,
+    values: crate::mem::MutPtr<ConstVoidPtr>,
+) {
+    for i in 0..range.length {
+        let idx: NSUInteger = (range.location + i).try_into().unwrap();
+        let value: id = msg![env; array objectAtIndex:idx];
+        env.mem.write(values + i as u32, value.cast().cast_const());
+    }
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(CFArrayGetValues(_, _, _)),
     export_c_func!(CFArrayCreateMutable(_, _, _)),
     export_c_func!(CFArrayGetCount(_)),
     export_c_func!(CFArrayGetValueAtIndex(_, _)),

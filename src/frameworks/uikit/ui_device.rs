@@ -109,7 +109,15 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 // NSString
 - (id)systemVersion {
-    ns_string::get_static_str(env, "2.0")
+    // Local patch: report the app's own minimum iOS version when it is above
+    // 2.0, since the app can never have run on anything older (some apps gate
+    // features, even taps, on the OS version).
+    let min = env.bundle.minimum_os_version().map(str::to_string);
+    let version = match min {
+        Some(v) if version_tuple(&v) > (2, 0, 0) => v,
+        _ => "2.0".to_string(),
+    };
+    ns_string::from_rust_string(env, version)
 }
 
 - (id)uniqueIdentifier {
@@ -201,4 +209,14 @@ pub fn generate_device_orientation_notification(env: &mut Environment) {
     let name = get_static_str(env, UIDeviceOrientationDidChangeNotification);
     let device: id = msg_class![env; UIDevice currentDevice];
     let _: () = msg![env; center postNotificationName:name object:device];
+}
+
+/// Local patch: "3.1.2" -> (3, 1, 2), for comparing OS versions.
+fn version_tuple(v: &str) -> (u32, u32, u32) {
+    let mut parts = v.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
 }

@@ -7,7 +7,7 @@
 
 use crate::frameworks::foundation::ns_string::to_rust_string;
 use crate::msg;
-use crate::objc::{id, nil, objc_classes, ClassExports};
+use crate::objc::{id, msg_super, nil, objc_classes, ClassExports};
 use std::borrow::Cow;
 
 pub const CLASSES: ClassExports = objc_classes! {
@@ -17,8 +17,10 @@ pub const CLASSES: ClassExports = objc_classes! {
 @implementation UIWebView: UIView
 
 // NSCoding implementation
-- (id)initWithCoder:(id)_coder {
-    todo!()
+// Local patch: decode as a plain view (web content isn't rendered).
+- (id)initWithCoder:(id)coder {
+    log!("TODO: UIWebView {:?} from a nib: web content won't be rendered", this);
+    msg_super![env; this initWithCoder:coder]
 }
 
 - (())setScalesPageToFit:(bool)_scales {
@@ -36,6 +38,14 @@ pub const CLASSES: ClassExports = objc_classes! {
         Cow::default()
     };
     log!("TODO: [(UIWebView*) {:?} loadRequest:{:?} ({})]", this, request, url_string);
+}
+// Local patch: accepted but not rendered.
+- (())loadHTMLString:(id)html baseURL:(id)_base_url { // NSString*, NSURL*
+    let len: crate::frameworks::foundation::NSUInteger = if html == nil { 0 } else { msg![env; html length] };
+    log!("TODO: [(UIWebView*) {:?} loadHTMLString:({} chars)] (not rendered)", this, len);
+}
+- (id)stringByEvaluatingJavaScriptFromString:(id)_script { // NSString*
+    crate::frameworks::foundation::ns_string::get_static_str(env, "")
 }
 
 @end

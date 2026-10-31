@@ -409,7 +409,20 @@ fn pthread_setschedparam(
     0
 }
 
+/// Local patch: signals and cancellation aren't supported. Apps mostly use
+/// these to stop worker threads on quit, so they are accepted and ignored.
+fn pthread_kill(_env: &mut Environment, thread: pthread_t, sig: i32) -> i32 {
+    log!("TODO: pthread_kill({:?}, {}) ignored", thread, sig);
+    0
+}
+fn pthread_cancel(_env: &mut Environment, thread: pthread_t) -> i32 {
+    log!("TODO: pthread_cancel({:?}) ignored", thread);
+    0
+}
+
 pub const FUNCTIONS: FunctionExports = &[
+    export_c_func!(pthread_kill(_, _)),
+    export_c_func!(pthread_cancel(_)),
     export_c_func!(pthread_attr_init(_)),
     export_c_func!(pthread_attr_getdetachstate(_, _)),
     export_c_func!(pthread_attr_setdetachstate(_, _)),

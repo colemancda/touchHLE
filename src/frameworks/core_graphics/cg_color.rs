@@ -124,12 +124,62 @@ fn CGColorEqualToColor(env: &mut Environment, a: CGColorRef, b: CGColorRef) -> b
     to_rgba(&env.objc, a) == to_rgba(&env.objc, b)
 }
 
+thread_local! {
+    /// Local patch: guest copies of each colour's components, so the pointer
+    /// returned by CGColorGetComponents stays valid (keyed by colour address).
+    static COMPONENTS: std::cell::RefCell<std::collections::HashMap<u32, MutPtr<CGFloat>>> = Default::default();
+}
+
+fn CGColorGetComponents(env: &mut Environment, color: CGColorRef) -> crate::mem::ConstPtr<CGFloat> {
+    let (r, g, b, a) = to_rgba(&env.objc, color);
+    let key = color.to_bits();
+    let ptr = match COMPONENTS.with(|c| c.borrow().get(&key).copied()) {
+        Some(p) => p,
+        None => {
+            let p: MutPtr<CGFloat> = env.mem.alloc(4 * 4).cast();
+            COMPONENTS.with(|c| c.borrow_mut().insert(key, p));
+            p
+        }
+    };
+    for (i, v) in [r, g, b, a].into_iter().enumerate() {
+        env.mem.write(ptr + i as u32, v);
+    }
+    ptr.cast_const()
+}
+
+fn CGColorGetNumberOfComponents(_env: &mut Environment, _color: CGColorRef) -> u32 {
+    4 // RGBA: only RGB colours are supported
+}
+
+fn CGColorGetAlpha(env: &mut Environment, color: CGColorRef) -> CGFloat {
+    to_rgba(&env.objc, color).3
+}
+
+thread_local! {
+    /// Local patch: one shared RGB colour space returned by CGColorGetColorSpace
+    /// ("Get" functions don't transfer ownership, so it is never released).
+    static RGB_SPACE: std::cell::Cell<Option<CGColorSpaceRef>> = const { std::cell::Cell::new(None) };
+}
+
+fn CGColorGetColorSpace(env: &mut Environment, _color: CGColorRef) -> CGColorSpaceRef {
+    if let Some(space) = RGB_SPACE.with(|s| s.get()) {
+        return space;
+    }
+    let space = crate::frameworks::core_graphics::cg_color_space::CGColorSpaceCreateDeviceRGB(env);
+    RGB_SPACE.with(|s| s.set(Some(space)));
+    space
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGColorRetain(_)),
     export_c_func!(CGColorRelease(_)),
     export_c_func!(CGColorCreate(_, _)),
     export_c_func!(CGColorCreateGenericRGB(_, _, _, _)),
     export_c_func!(CGColorEqualToColor(_, _)),
+    export_c_func!(CGColorGetComponents(_)),
+    export_c_func!(CGColorGetNumberOfComponents(_)),
+    export_c_func!(CGColorGetAlpha(_)),
+    export_c_func!(CGColorGetColorSpace(_)),
 ];
 
 /// Shortcut for use by `UIColor`: directly construct a `CGColor` instance from

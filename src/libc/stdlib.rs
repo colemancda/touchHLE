@@ -655,6 +655,11 @@ fn fcvt(
     fcvt_buf
 }
 
+// Local patch: stop with a clear message instead of an unknown-function error.
+fn abort(_env: &mut Environment) {
+    panic!("The app called abort()");
+}
+
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(malloc(_)),
     export_c_func!(malloc_size(_)),
@@ -679,6 +684,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(setenv(_, _, _)),
     export_c_func!(unsetenv(_)),
     export_c_func!(exit(_)),
+    export_c_func!(abort()),
     export_c_func!(bsearch(_, _, _, _, _)),
     export_c_func!(strtof(_, _)),
     export_c_func!(strtoul(_, _, _)),

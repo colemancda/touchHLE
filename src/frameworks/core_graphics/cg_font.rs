@@ -46,6 +46,49 @@ fn CGFontCreateWithDataProvider(env: &mut Environment, provider: CGDataProviderR
     env.objc.alloc_object(class, host_obj, &mut env.mem)
 }
 
+/// Local patch: there are no system fonts, so a font name is mapped to the
+/// closest of touchHLE's bundled fonts (Liberation, Noto Sans JP).
+fn CGFontCreateWithFontName(env: &mut Environment, name: CFTypeRef) -> CGFontRef {
+    let name = crate::frameworks::foundation::ns_string::to_rust_string(env, name).to_lowercase();
+    let bold = name.contains("bold");
+    let italic = name.contains("italic") || name.contains("oblique");
+    let font = if name.contains("gothic") || name.contains("hiragino") || name.contains("mincho") {
+        if bold {
+            Font::sans_bold_ja()
+        } else {
+            Font::sans_regular_ja()
+        }
+    } else if name.contains("courier") || name.contains("mono") {
+        match (bold, italic) {
+            (true, true) => Font::mono_bold_italic(),
+            (true, false) => Font::mono_bold(),
+            (false, true) => Font::mono_italic(),
+            (false, false) => Font::mono_regular(),
+        }
+    } else if name.contains("times")
+        || name.contains("georgia")
+        || (name.contains("serif") && !name.contains("sans"))
+    {
+        match (bold, italic) {
+            (true, true) => Font::serif_bold_italic(),
+            (true, false) => Font::serif_bold(),
+            (false, true) => Font::serif_italic(),
+            (false, false) => Font::serif_regular(),
+        }
+    } else {
+        match (bold, italic) {
+            (true, true) => Font::sans_bold_italic(),
+            (true, false) => Font::sans_bold(),
+            (false, true) => Font::sans_italic(),
+            (false, false) => Font::sans_regular(),
+        }
+    };
+    log!("CGFontCreateWithFontName({:?}): using a bundled font", name);
+    let host_obj = Box::new(CGFontHostObject { font });
+    let class = env.objc.get_known_class("_touchHLE_CGFont", &mut env.mem);
+    env.objc.alloc_object(class, host_obj, &mut env.mem)
+}
+
 pub fn CGFontRetain(env: &mut Environment, font: CGFontRef) -> CGFontRef {
     if !font.is_null() {
         CFRetain(env, font)
@@ -186,6 +229,7 @@ fn CGFontGetNumberOfGlyphs(env: &mut Environment, font: CGFontRef) -> GuestUSize
 
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGFontCreateWithDataProvider(_)),
+    export_c_func!(CGFontCreateWithFontName(_)),
     export_c_func!(CGFontRetain(_)),
     export_c_func!(CGFontRelease(_)),
     export_c_func!(CGFontGetGlyphsForUnichars(_, _, _, _)),

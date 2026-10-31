@@ -22,6 +22,13 @@ use crate::objc::{
 
 type UIBaselineAdjustment = NSInteger;
 
+thread_local! {
+    /// Local patch: labels set to disabled (keyed by object address).
+    static DISABLED_LABELS: std::cell::RefCell<std::collections::HashSet<u32>> = Default::default();
+    /// Local patch: shadow colour (retained) and offset per label.
+    static LABEL_SHADOWS: std::cell::RefCell<std::collections::HashMap<u32, (id, CGSize)>> = Default::default();
+}
+
 pub struct UILabelHostObject {
     superclass: super::UIViewHostObject,
     /// `NSString*`
@@ -38,7 +45,12 @@ impl_HostObject_with_superclass!(UILabelHostObject);
 impl Default for UILabelHostObject {
     fn default() -> Self {
         UILabelHostObject {
-            superclass: Default::default(),
+            // Local patch: as on iOS, labels don't take touches by default, so
+            // taps fall through to the view behind them.
+            superclass: super::UIViewHostObject {
+                user_interaction_enabled: false,
+                ..Default::default()
+            },
             text: nil,
             font: nil,
             text_color: nil,
@@ -170,6 +182,12 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (id)textColor {
     env.objc.borrow::<UILabelHostObject>(this).text_color
 }
+// Local patch: accepted; labels aren't drawn highlighted.
+- (())setHighlightedTextColor:(id)color { // UIColor*
+    todo_objc_setter!(this, color);
+}
+- (())setHighlighted:(bool)_highlighted {}
+
 - (())setTextColor:(id)new_text_color { // UIFont*
     let new_text_color: id = if new_text_color == nil {
         msg_class![env; UIColor blackColor]
@@ -201,11 +219,23 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg_super![env; this setBackgroundColor:color]
 }
 
+// Local patch: shadow properties are stored and read back, but not drawn.
 - (())setShadowColor:(id)color { // UIColor*
     todo_objc_setter!(this, color);
+    retain(env, color);
+    let old = LABEL_SHADOWS.with(|s| s.borrow_mut().entry(this.to_bits()).or_insert((nil, CGSize { width: 0.0, height: -1.0 })).0);
+    LABEL_SHADOWS.with(|s| s.borrow_mut().get_mut(&this.to_bits()).unwrap().0 = color);
+    release(env, old);
+}
+- (id)shadowColor {
+    LABEL_SHADOWS.with(|s| s.borrow().get(&this.to_bits()).map(|v| v.0).unwrap_or(nil))
 }
 - (())setShadowOffset:(CGSize)value {
     todo_objc_setter!(this, value);
+    LABEL_SHADOWS.with(|s| s.borrow_mut().entry(this.to_bits()).or_insert((nil, value)).1 = value);
+}
+- (CGSize)shadowOffset {
+    LABEL_SHADOWS.with(|s| s.borrow().get(&this.to_bits()).map(|v| v.1)).unwrap_or(CGSize { width: 0.0, height: -1.0 })
 }
 
 - (())setOpaque:(bool)_opaque {
@@ -237,6 +267,16 @@ pub const CLASSES: ClassExports = objc_classes! {
         log!("TODO: UILabel numberOfLines > 1 (label {:?})", this);
     }
     () = msg![env; this setNeedsDisplay];
+}
+
+// Local patch: accepted, but disabled labels are not drawn greyed out.
+- (bool)isEnabled {
+    !DISABLED_LABELS.with(|d| d.borrow().contains(&this.to_bits()))
+}
+- (())setEnabled:(bool)enabled {
+    DISABLED_LABELS.with(|d| {
+        if enabled { d.borrow_mut().remove(&this.to_bits()); } else { d.borrow_mut().insert(this.to_bits()); }
+    });
 }
 
 - (())setBaselineAdjustment:(UIBaselineAdjustment)value {

@@ -354,6 +354,11 @@ fn CGRectIsNull(_env: &mut Environment, rect: CGRect) -> bool {
     rect == CGRectNull
 }
 
+// Local patch
+fn CGRectIsEmpty(_env: &mut Environment, rect: CGRect) -> bool {
+    rect == CGRectNull || rect.size.width == 0.0 || rect.size.height == 0.0
+}
+
 fn CGRectOffset(_env: &mut Environment, rect: CGRect, dx: CGFloat, dy: CGFloat) -> CGRect {
     assert!(rect != CGRectNull); // TODO
     CGRect {
@@ -424,6 +429,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGRectGetWidth(_)),
     export_c_func!(CGRectMake(_, _, _, _)),
     export_c_func!(CGRectIsNull(_)),
+    export_c_func!(CGRectIsEmpty(_)),
     export_c_func!(CGRectOffset(_, _, _)),
     export_c_func!(CGRectInset(_, _, _)),
     export_c_func!(CGRectIntegral(_)),
@@ -445,5 +451,11 @@ pub const CONSTANTS: ConstantExports = &[
     (
         "_CGRectNull",
         HostConstant::Custom(|env| env.mem.alloc_and_write(CGRectNull).cast().cast_const()),
+    ),
+    // Local patch: UIKit's UIEdgeInsetsZero (four zero floats, the same bytes
+    // as CGRectZero), which apps read directly.
+    (
+        "_UIEdgeInsetsZero",
+        HostConstant::Custom(|env| env.mem.alloc_and_write(CGRectZero).cast().cast_const()),
     ),
 ];

@@ -19,8 +19,19 @@ use crate::Environment;
 const NSLocaleCountryCode: &str = "NSLocaleCountryCode";
 const NSLocaleLanguageCode: &str = "NSLocaleLanguageCode";
 const NSLocaleIdentifier: &str = "NSLocaleIdentifier";
+// Local patch
+const NSLocaleCurrencyCode: &str = "currency";
+const NSLocaleCurrencySymbol: &str = "currencySymbol";
 
 pub const CONSTANTS: ConstantExports = &[
+    (
+        "_NSLocaleCurrencyCode",
+        HostConstant::NSString(NSLocaleCurrencyCode),
+    ),
+    (
+        "_NSLocaleCurrencySymbol",
+        HostConstant::NSString(NSLocaleCurrencySymbol),
+    ),
     (
         "_NSLocaleCountryCode",
         HostConstant::NSString(NSLocaleCountryCode),

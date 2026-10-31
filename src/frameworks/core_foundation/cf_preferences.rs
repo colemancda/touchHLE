@@ -27,6 +27,37 @@ fn CFPreferencesCopyAppValue(
     assert!(msg![env; app_id isEqualToString:current_app]);
     let user_defaults: id = msg_class![env; NSUserDefaults standardUserDefaults];
     let value: id = msg![env; user_defaults objectForKey:key];
+    if std::env::var_os("TOUCHHLE_PREFS_LOG").is_some() {
+        let c: crate::objc::Class = if value == crate::objc::nil {
+            crate::objc::nil
+        } else {
+            msg![env; value class]
+        };
+        log!(
+            "CFPreferencesCopyAppValue({:?}) -> {:?} ({})",
+            ns_string::to_rust_string(env, key),
+            value,
+            if value == crate::objc::nil {
+                "nil".to_string()
+            } else {
+                env.objc.get_class_name(c).to_string()
+            }
+        );
+        let dict: id = msg![env; user_defaults dictionaryRepresentation];
+        let keys: id = msg![env; dict allKeys];
+        let n: crate::frameworks::foundation::NSUInteger = msg![env; keys count];
+        for i in 0..n {
+            let k: id = msg![env; keys objectAtIndex:i];
+            let v: id = msg![env; dict objectForKey:k];
+            let vc: crate::objc::Class = msg![env; v class];
+            log!(
+                "  defaults has {:?} = {:?} ({})",
+                ns_string::to_rust_string(env, k),
+                v,
+                env.objc.get_class_name(vc)
+            );
+        }
+    }
     msg![env; value copy]
 }
 
@@ -36,11 +67,21 @@ fn CFPreferencesSetAppValue(
     value: CFPropertyListRef,
     app_id: CFStringRef,
 ) {
-    assert!(!value.is_null()); // TODO
     let current_app = ns_string::get_static_str(env, kCFPreferencesCurrentApplication);
     // TODO: handle other ids
     assert!(msg![env; app_id isEqualToString:current_app]);
     let user_defaults: id = msg_class![env; NSUserDefaults standardUserDefaults];
+    if std::env::var_os("TOUCHHLE_PREFS_LOG").is_some() {
+        log!(
+            "CFPreferencesSetAppValue({:?}, {:?})",
+            ns_string::to_rust_string(env, key),
+            value
+        );
+    }
+    // Local patch: a NULL value removes the key, as in CoreFoundation.
+    if value.is_null() {
+        return msg![env; user_defaults removeObjectForKey:key];
+    }
     msg![env; user_defaults setObject:value forKey:key]
 }
 

@@ -23,6 +23,7 @@ use crate::objc::{
 use crate::Environment;
 
 pub mod ui_navigation_controller;
+pub mod ui_tab_bar_controller;
 
 #[derive(Default)]
 struct UIViewControllerHostObject {
@@ -72,6 +73,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     let view: id = msg![env; coder decodeObjectForKey:key_ns_string];
 
     () = msg![env; this setView:view];
+
+    // Local patch: view controllers inside another nib (e.g. a tab bar
+    // controller's tabs) name the nib their view comes from.
+    let key_ns_string = get_static_str(env, "UINibName");
+    let nib_name: id = msg![env; coder decodeObjectForKey:key_ns_string];
+    if nib_name != nil {
+        retain(env, nib_name);
+        env.objc.borrow_mut::<UIViewControllerHostObject>(this).nib_name = nib_name;
+    }
 
     this
 }
