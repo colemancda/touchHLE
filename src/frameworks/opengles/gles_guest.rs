@@ -153,18 +153,76 @@ fn glGetError(env: &mut Environment) -> GLenum {
         err
     })
 }
+/// Local patch: OES_matrix_palette (vertex skinning) isn't supported. Its
+/// capability and arrays are accepted and ignored, so skinned meshes are drawn
+/// unskinned (in their bind pose) instead of crashing the app.
+const MATRIX_PALETTE_OES: GLenum = 0x8840;
+const MATRIX_INDEX_ARRAY_OES: GLenum = 0x8844;
+const WEIGHT_ARRAY_OES: GLenum = 0x86AD;
+fn is_matrix_palette_enum(cap: GLenum) -> bool {
+    if matches!(
+        cap,
+        MATRIX_PALETTE_OES | MATRIX_INDEX_ARRAY_OES | WEIGHT_ARRAY_OES
+    ) {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| {
+            log!("TODO: OES_matrix_palette is ignored; skinned meshes won't be skinned");
+        });
+        true
+    } else {
+        false
+    }
+}
+
+thread_local! {
+    /// Local patch: true while glMatrixMode(GL_MATRIX_PALETTE_OES) is in effect.
+    static PALETTE_MATRIX_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Local patch: matrix operations on the (unsupported) palette matrices are
+/// dropped, so they don't land on the model-view or projection matrix.
+fn in_palette_matrix_mode() -> bool {
+    PALETTE_MATRIX_MODE.with(|p| p.get())
+}
+
 fn glEnable(env: &mut Environment, cap: GLenum) {
+    if is_matrix_palette_enum(cap) {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Enable(cap) };
     });
 }
 fn glIsEnabled(env: &mut Environment, cap: GLenum) -> GLboolean {
+    if is_matrix_palette_enum(cap) {
+        return 0;
+    }
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.IsEnabled(cap) })
 }
 fn glDisable(env: &mut Environment, cap: GLenum) {
+    if is_matrix_palette_enum(cap) {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Disable(cap) };
     });
+}
+fn glCurrentPaletteMatrixOES(_env: &mut Environment, _index: GLuint) {}
+fn glLoadPaletteFromModelViewMatrixOES(_env: &mut Environment) {}
+fn glMatrixIndexPointerOES(
+    _env: &mut Environment,
+    _size: GLint,
+    _type: GLenum,
+    _stride: GLsizei,
+    _pointer: ConstVoidPtr,
+) {
+}
+fn glWeightPointerOES(
+    _env: &mut Environment,
+    _size: GLint,
+    _type: GLenum,
+    _stride: GLsizei,
+    _pointer: ConstVoidPtr,
+) {
 }
 fn glClientActiveTexture(env: &mut Environment, texture: GLenum) {
     with_ctx_and_mem(env, |gles, _mem| unsafe {
@@ -172,11 +230,17 @@ fn glClientActiveTexture(env: &mut Environment, texture: GLenum) {
     })
 }
 fn glEnableClientState(env: &mut Environment, array: GLenum) {
+    if is_matrix_palette_enum(array) {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.EnableClientState(array) };
     });
 }
 fn glDisableClientState(env: &mut Environment, array: GLenum) {
+    if is_matrix_palette_enum(array) {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.DisableClientState(array) };
     });
@@ -781,45 +845,72 @@ fn glClearStencil(env: &mut Environment, s: GLint) {
 
 // Matrix stack operations
 fn glMatrixMode(env: &mut Environment, mode: GLenum) {
+    // Local patch: see in_palette_matrix_mode().
+    PALETTE_MATRIX_MODE.with(|p| p.set(mode == MATRIX_PALETTE_OES));
+    if mode == MATRIX_PALETTE_OES {
+        is_matrix_palette_enum(mode);
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.MatrixMode(mode) };
     });
 }
 fn glLoadIdentity(env: &mut Environment) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.LoadIdentity() };
     });
 }
 fn glLoadMatrixf(env: &mut Environment, m: ConstPtr<GLfloat>) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let m = mem.ptr_at(m, 16);
         unsafe { gles.LoadMatrixf(m) };
     });
 }
 fn glLoadMatrixx(env: &mut Environment, m: ConstPtr<GLfixed>) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let m = mem.ptr_at(m, 16);
         unsafe { gles.LoadMatrixx(m) };
     });
 }
 fn glMultMatrixf(env: &mut Environment, m: ConstPtr<GLfloat>) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let m = mem.ptr_at(m, 16);
         unsafe { gles.MultMatrixf(m) };
     });
 }
 fn glMultMatrixx(env: &mut Environment, m: ConstPtr<GLfixed>) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, mem| {
         let m = mem.ptr_at(m, 16);
         unsafe { gles.MultMatrixx(m) };
     });
 }
 fn glPushMatrix(env: &mut Environment) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.PushMatrix() };
     });
 }
 fn glPopMatrix(env: &mut Environment) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.PopMatrix() };
     });
@@ -833,6 +924,9 @@ fn glOrthof(
     near: GLfloat,
     far: GLfloat,
 ) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Orthof(left, right, bottom, top, near, far) };
     });
@@ -846,6 +940,9 @@ fn glOrthox(
     near: GLfixed,
     far: GLfixed,
 ) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Orthox(left, right, bottom, top, near, far) };
     });
@@ -859,6 +956,9 @@ fn glFrustumf(
     near: GLfloat,
     far: GLfloat,
 ) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Frustumf(left, right, bottom, top, near, far) };
     });
@@ -872,36 +972,57 @@ fn glFrustumx(
     near: GLfixed,
     far: GLfixed,
 ) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Frustumx(left, right, bottom, top, near, far) };
     });
 }
 fn glRotatef(env: &mut Environment, angle: GLfloat, x: GLfloat, y: GLfloat, z: GLfloat) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Rotatef(angle, x, y, z) };
     });
 }
 fn glRotatex(env: &mut Environment, angle: GLfixed, x: GLfixed, y: GLfixed, z: GLfixed) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Rotatex(angle, x, y, z) };
     });
 }
 fn glScalef(env: &mut Environment, x: GLfloat, y: GLfloat, z: GLfloat) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Scalef(x, y, z) };
     });
 }
 fn glScalex(env: &mut Environment, x: GLfixed, y: GLfixed, z: GLfixed) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Scalex(x, y, z) };
     });
 }
 fn glTranslatef(env: &mut Environment, x: GLfloat, y: GLfloat, z: GLfloat) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Translatef(x, y, z) };
     });
 }
 fn glTranslatex(env: &mut Environment, x: GLfixed, y: GLfixed, z: GLfixed) {
+    if in_palette_matrix_mode() {
+        return;
+    }
     with_ctx_and_mem(env, |gles, _mem| {
         unsafe { gles.Translatex(x, y, z) };
     });
@@ -1475,6 +1596,10 @@ pub const FUNCTIONS: FunctionExports = &[
     // Generic state manipulation
     export_c_func!(glGetError()),
     export_c_func!(glEnable(_)),
+    export_c_func!(glCurrentPaletteMatrixOES(_)),
+    export_c_func!(glLoadPaletteFromModelViewMatrixOES()),
+    export_c_func!(glMatrixIndexPointerOES(_, _, _, _)),
+    export_c_func!(glWeightPointerOES(_, _, _, _)),
     export_c_func!(glIsEnabled(_)),
     export_c_func!(glDisable(_)),
     export_c_func!(glClientActiveTexture(_)),

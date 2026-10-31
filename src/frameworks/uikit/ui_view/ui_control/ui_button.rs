@@ -6,7 +6,7 @@
 //! `UIButton`.
 
 use super::{UIControlState, UIControlStateNormal};
-use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect};
+use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::{from_rust_string, get_static_str, to_rust_string};
 use crate::frameworks::foundation::NSInteger;
 use crate::frameworks::uikit::ui_font::UITextAlignmentCenter;
@@ -37,6 +37,10 @@ struct UIButtonContentHostObject {
     title: id,
     /// `UIColor*`
     title_color: id,
+    /// Local patch: `UIImage*`
+    image: id,
+    /// Local patch: `UIImage*`
+    background_image: id,
 }
 impl HostObject for UIButtonContentHostObject {}
 
@@ -89,6 +93,9 @@ fn update(env: &mut Environment, this: id) {
     let background_image_view: id = msg![env; this backgroundImageView];
     let background_image: id = msg![env; this currentBackgroundImage];
     () = msg![env; background_image_view setImage:background_image];
+
+    // Local patch: re-run layout so a new image gets a frame.
+    () = msg![env; this layoutSubviews];
 }
 
 fn init_common(env: &mut Environment, this: id) -> id {
@@ -212,6 +219,16 @@ pub const CLASSES: ClassExports = objc_classes! {
         () = msg![env; this setTitleColor:title_color forState:UIControlStateNormal];
     }
 
+    // Local patch: images set in the nib
+    let image: id = msg![env; button_content image];
+    if image != nil {
+        () = msg![env; this setImage:image forState:UIControlStateNormal];
+    }
+    let background_image: id = msg![env; button_content backgroundImage];
+    if background_image != nil {
+        () = msg![env; this setBackgroundImage:background_image forState:UIControlStateNormal];
+    }
+
     // TODO: decode other properties
     update(env, this);
 
@@ -256,8 +273,26 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     () = msg![env; background_image_view setFrame:bounds];
     () = msg![env; label setFrame:bounds];
-    // TODO: layout for image
 
+    // Local patch: the image is centred at its natural size (scaled down to
+    // fit), as with the default content alignment on iOS.
+    let image_view = env.objc.borrow::<UIButtonHostObject>(this).image_view;
+    let image: id = msg![env; image_view image];
+    let frame = if image == nil {
+        CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 0.0, height: 0.0 } }
+    } else {
+        let size: CGSize = msg![env; image size];
+        let scale = (bounds.size.width / size.width).min(bounds.size.height / size.height).min(1.0);
+        let (w, h) = (size.width * scale, size.height * scale);
+        CGRect {
+            origin: CGPoint {
+                x: bounds.origin.x + (bounds.size.width - w) / 2.0,
+                y: bounds.origin.y + (bounds.size.height - h) / 2.0,
+            },
+            size: CGSize { width: w, height: h },
+        }
+    };
+    () = msg![env; image_view setFrame:frame];
 }
 
 - (UIButtonType)buttonType {
@@ -419,19 +454,35 @@ pub const CLASSES: ClassExports = objc_classes! {
     let title_color: id = msg![env; coder decodeObjectForKey:title_color_key];
     log_dbg!("UIButtonContent: UITitleColor -> {:?}", title_color);
 
+    // Local patch: images
+    let image_key = get_static_str(env, "UIImage");
+    let image: id = msg![env; coder decodeObjectForKey:image_key];
+    let background_image_key = get_static_str(env, "UIBackgroundImage");
+    let background_image: id = msg![env; coder decodeObjectForKey:background_image_key];
+
     // TODO: decode other properties
 
     retain(env, title);
     retain(env, title_color);
+    retain(env, image);
+    retain(env, background_image);
     let host_obj = env.objc.borrow_mut::<UIButtonContentHostObject>(this);
     host_obj.title = title;
     host_obj.title_color = title_color;
+    host_obj.image = image;
+    host_obj.background_image = background_image;
 
     this
 }
 
 - (id)title {
     env.objc.borrow::<UIButtonContentHostObject>(this).title
+}
+- (id)image {
+    env.objc.borrow::<UIButtonContentHostObject>(this).image
+}
+- (id)backgroundImage {
+    env.objc.borrow::<UIButtonContentHostObject>(this).background_image
 }
 - (id)titleColor {
     env.objc.borrow::<UIButtonContentHostObject>(this).title_color
@@ -450,10 +501,14 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())dealloc {
     let &UIButtonContentHostObject {
         title,
-        title_color
+        title_color,
+        image,
+        background_image,
     } = env.objc.borrow(this);
     release(env, title);
     release(env, title_color);
+    release(env, image);
+    release(env, background_image);
 
     env.objc.dealloc_object(this, &mut env.mem)
 }

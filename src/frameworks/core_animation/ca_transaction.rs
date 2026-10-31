@@ -99,6 +99,9 @@ impl Transaction {
         let animation_timing_function_name = get_static_str(env, kCAMediaTimingFunctionDefault);
         let animation_timing_function =
             msg_class![env; CAMediaTimingFunction functionWithName:animation_timing_function_name];
+        // Local patch: the transaction owns its timing function (setValue:forKey:
+        // releases the old one), so retain this autoreleased default.
+        retain(env, animation_timing_function);
         Self {
             disable_actions: false,
             animation_duration: 0.25,
@@ -130,6 +133,7 @@ impl Transaction {
         for (_key, value) in self.data {
             release(env, value);
         }
+        release(env, self.animation_timing_function);
     }
 }
 

@@ -280,9 +280,23 @@ pub const CLASSES: ClassExports = objc_classes! {
                 let did_stop_selector = to_rust_string(env, did_stop_selector);
                 let did_stop_selector = env.objc.lookup_selector(&did_stop_selector).unwrap();
                 () = msg![env; animation_delegate setDidStopSelector:did_stop_selector];
+            } else if env.objc.object_has_method_named(&env.mem, delegate, "animationDidStop:finished:context:") {
+                // Local patch: with no selector set, early UIKit called the
+                // delegate's animationDidStop:finished:context: if it had one
+                // (Monopoly's menu waits for this before accepting taps).
+                let did_stop_selector = env.objc.lookup_selector("animationDidStop:finished:context:").unwrap();
+                () = msg![env; animation_delegate setDidStopSelector:did_stop_selector];
             }
             let total_animation_count = animations.len() as u32;
             () = msg![env; animation_delegate setTotalAnimationCount:total_animation_count];
+            if total_animation_count == 0 {
+                // Local patch: with nothing touchHLE can animate (e.g. only a
+                // transform change), no CAAnimation will ever report back, so
+                // send the start/stop callbacks on the next run loop pass, as
+                // iOS does for an animation block that changes nothing.
+                let sel = env.objc.register_host_selector("_touchHLE_finishEmptyAnimation".to_string(), &mut env.mem);
+                () = msg![env; animation_delegate performSelector:sel withObject:nil afterDelay:(0.0 as NSTimeInterval)];
+            }
             animation_delegate
         };
         let delay: id = msg_class![env; CATransaction valueForKey:(get_static_str(env, touchHLE_kCATransactionAnimationDelay))];
@@ -961,6 +975,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 // CAAnimationDelegate protocol implementation
+// Local patch: see commitAnimations (animation block with no animations).
+- (())_touchHLE_finishEmptyAnimation {
+    env.objc.borrow_mut::<UIViewAnimationDelegateHostObject>(this).total_animation_count = 1;
+    () = msg![env; this animationDidStart:nil];
+    () = msg![env; this animationDidStop:nil finished:true];
+}
+
 - (())animationDidStart:(id)animation { // CAAnimation*
     let UIViewAnimationDelegateHostObject {
         started_animation_count,

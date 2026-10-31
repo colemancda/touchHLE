@@ -123,6 +123,32 @@ fn CGContextSetFillColorSpace(
 }
 
 fn CGContextSetFillColorWithColor(env: &mut Environment, context: CGContextRef, color: CGColorRef) {
+    // Local patch: a NULL colour leaves the fill colour unchanged, as on iOS;
+    // anything else that isn't a CGColor (e.g. a UIColor) is asked for one.
+    if color.is_null() {
+        log!("CGContextSetFillColorWithColor: NULL colour, ignoring");
+        return;
+    }
+    let is_cg_color = env
+        .objc
+        .get_host_object(color)
+        .and_then(|h| h.as_any().downcast_ref::<cg_color::CGColorHostObject>())
+        .is_some();
+    let color = if is_cg_color {
+        color
+    } else {
+        let class: crate::objc::Class = crate::msg![env; color class];
+        log!(
+            "CGContextSetFillColorWithColor: {:?} is a {}, not a CGColor",
+            color,
+            env.objc.get_class_name(class)
+        );
+        let cg: CGColorRef = crate::msg![env; color CGColor];
+        if cg.is_null() {
+            return;
+        }
+        cg
+    };
     let (r, g, b, a) = cg_color::to_rgba(&env.objc, color);
     CGContextSetRGBFillColor(env, context, r, g, b, a)
 }
@@ -182,6 +208,108 @@ fn CGContextSetRGBStrokeColor(
         b,
         a
     );
+}
+
+// Local patch: minimal paths. Points are collected per context and a filled
+// path is drawn as its bounding box (so rounded boxes come out square).
+// Strokes are accepted but not drawn.
+thread_local! {
+    static PATHS: std::cell::RefCell<std::collections::HashMap<u32, Vec<CGPoint>>> = Default::default();
+}
+fn path_add(context: CGContextRef, points: &[CGPoint]) {
+    PATHS.with(|p| {
+        p.borrow_mut()
+            .entry(context.to_bits())
+            .or_default()
+            .extend_from_slice(points)
+    });
+}
+fn CGContextBeginPath(_env: &mut Environment, context: CGContextRef) {
+    PATHS.with(|p| p.borrow_mut().remove(&context.to_bits()));
+}
+fn CGContextMoveToPoint(_env: &mut Environment, context: CGContextRef, x: CGFloat, y: CGFloat) {
+    path_add(context, &[CGPoint { x, y }]);
+}
+fn CGContextAddArcToPoint(
+    _env: &mut Environment,
+    context: CGContextRef,
+    x1: CGFloat,
+    y1: CGFloat,
+    x2: CGFloat,
+    y2: CGFloat,
+    _radius: CGFloat,
+) {
+    path_add(
+        context,
+        &[CGPoint { x: x1, y: y1 }, CGPoint { x: x2, y: y2 }],
+    );
+}
+fn CGContextAddRect(_env: &mut Environment, context: CGContextRef, rect: CGRect) {
+    let CGRect { origin: o, size: s } = rect;
+    path_add(
+        context,
+        &[
+            o,
+            CGPoint {
+                x: o.x + s.width,
+                y: o.y + s.height,
+            },
+        ],
+    );
+}
+fn CGContextClosePath(_env: &mut Environment, _context: CGContextRef) {}
+fn CGContextFillPath(env: &mut Environment, context: CGContextRef) {
+    let points = PATHS
+        .with(|p| p.borrow_mut().remove(&context.to_bits()))
+        .unwrap_or_default();
+    if points.is_empty() {
+        return;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for p in &points {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    let rect = CGRect {
+        origin: CGPoint { x: x0, y: y0 },
+        size: CGSize {
+            width: x1 - x0,
+            height: y1 - y0,
+        },
+    };
+    CGContextFillRect(env, context, rect);
+}
+fn CGContextSetLineWidth(_env: &mut Environment, _context: CGContextRef, _width: CGFloat) {}
+fn CGContextSetStrokeColor(
+    _env: &mut Environment,
+    _context: CGContextRef,
+    _components: ConstPtr<CGFloat>,
+) {
+}
+fn CGContextSetStrokeColorSpace(
+    _env: &mut Environment,
+    _context: CGContextRef,
+    _space: CGColorSpaceRef,
+) {
+}
+fn CGContextStrokeLineSegments(
+    _env: &mut Environment,
+    _context: CGContextRef,
+    _points: ConstPtr<CGPoint>,
+    _count: GuestUSize,
+) {
+    log!("TODO: CGContextStrokeLineSegments (lines aren't drawn)");
+}
+/// Components in the current fill colour space, which is always RGB(A) here.
+fn CGContextSetFillColor(
+    env: &mut Environment,
+    context: CGContextRef,
+    components: ConstPtr<CGFloat>,
+) {
+    let c: Vec<CGFloat> = (0..4).map(|i| env.mem.read(components + i)).collect();
+    CGContextSetRGBFillColor(env, context, c[0], c[1], c[2], c[3]);
 }
 
 fn CGContextSetShadowWithColor(
@@ -341,7 +469,58 @@ fn CGContextSetTextDrawingMode(
     _context: CGContextRef,
     mode: CGTextDrawingMode,
 ) {
-    assert!(mode == kCGTextFill || mode == kCGTextFillStroke); // TODO: support other modes
+    // Local patch: invisible (3) and clip-only (7) text is not drawn; every other
+    // mode (stroke, *Clip) is drawn as filled text, as fill was before.
+    let invisible = mode == 3 || mode == 7;
+    if !(mode == kCGTextFill || mode == kCGTextFillStroke || invisible) {
+        log!(
+            "TODO: CGContextSetTextDrawingMode({}): drawing as kCGTextFill",
+            mode
+        );
+    }
+    INVISIBLE_TEXT.with(|s| {
+        if invisible {
+            s.borrow_mut().insert(_context.to_bits());
+        } else {
+            s.borrow_mut().remove(&_context.to_bits());
+        }
+    });
+}
+
+thread_local! {
+    /// Local patch: contexts whose text drawing mode makes text invisible.
+    static INVISIBLE_TEXT: std::cell::RefCell<std::collections::HashSet<u32>> = Default::default();
+    /// Local patch: current text position per context.
+    static TEXT_POSITION: std::cell::RefCell<std::collections::HashMap<u32, (CGFloat, CGFloat)>> = Default::default();
+}
+
+fn CGContextSetTextPosition(_env: &mut Environment, context: CGContextRef, x: CGFloat, y: CGFloat) {
+    TEXT_POSITION.with(|p| p.borrow_mut().insert(context.to_bits(), (x, y)));
+}
+
+fn CGContextGetTextPosition(_env: &mut Environment, context: CGContextRef) -> CGPoint {
+    let (x, y) = TEXT_POSITION.with(|p| {
+        p.borrow()
+            .get(&context.to_bits())
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    });
+    CGPoint { x, y }
+}
+
+fn CGContextShowGlyphs(
+    env: &mut Environment,
+    context: CGContextRef,
+    glyphs: ConstPtr<CGGlyph>,
+    count: GuestUSize,
+) {
+    let (x, y) = TEXT_POSITION.with(|p| {
+        p.borrow()
+            .get(&context.to_bits())
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    });
+    CGContextShowGlyphsAtPoint(env, context, x, y, glyphs, count)
 }
 
 fn CGContextSetTextMatrix(
@@ -363,6 +542,23 @@ fn CGContextShowGlyphsAtPoint(
     glyphs: ConstPtr<CGGlyph>,
     count: GuestUSize,
 ) {
+    // Local patch: advance the text position past these glyphs (apps measure
+    // text by drawing it invisibly and reading the position back).
+    {
+        let host = env.objc.borrow::<CGContextHostObject>(context);
+        let (font_ref, size) = (host.font, host.font_size);
+        let font = &env.objc.borrow::<CGFontHostObject>(font_ref).font;
+        let scale = size / font.units_per_em() as CGFloat;
+        let mut advance: CGFloat = 0.0;
+        for i in 0..count {
+            let glyph_id: CGGlyph = env.mem.read(glyphs + i);
+            advance += font.glyph_hor_advance(glyph_id).unwrap_or(0) as CGFloat * scale;
+        }
+        TEXT_POSITION.with(|p| p.borrow_mut().insert(context.to_bits(), (x + advance, y)));
+    }
+    if INVISIBLE_TEXT.with(|s| s.borrow().contains(&context.to_bits())) {
+        return;
+    }
     let mut glyph_ids = Vec::new();
     for i in 0..count {
         let glyph_id = env.mem.read(glyphs + i);
@@ -440,6 +636,17 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextSetRGBStrokeColor(_, _, _, _, _)),
     export_c_func!(CGContextSetShadowWithColor(_, _, _, _)),
     export_c_func!(CGContextFillRect(_, _)),
+    export_c_func!(CGContextBeginPath(_)),
+    export_c_func!(CGContextMoveToPoint(_, _, _)),
+    export_c_func!(CGContextAddArcToPoint(_, _, _, _, _, _)),
+    export_c_func!(CGContextAddRect(_, _)),
+    export_c_func!(CGContextClosePath(_)),
+    export_c_func!(CGContextFillPath(_)),
+    export_c_func!(CGContextSetLineWidth(_, _)),
+    export_c_func!(CGContextSetStrokeColor(_, _)),
+    export_c_func!(CGContextSetStrokeColorSpace(_, _)),
+    export_c_func!(CGContextStrokeLineSegments(_, _, _)),
+    export_c_func!(CGContextSetFillColor(_, _)),
     export_c_func!(CGContextClearRect(_, _)),
     export_c_func!(CGContextClipToRect(_, _)),
     export_c_func!(CGContextConcatCTM(_, _)),
@@ -458,5 +665,8 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextSetTextDrawingMode(_, _)),
     export_c_func!(CGContextSetTextMatrix(_, _)),
     export_c_func!(CGContextShowGlyphsAtPoint(_, _, _, _, _)),
+    export_c_func!(CGContextSetTextPosition(_, _, _)),
+    export_c_func!(CGContextGetTextPosition(_)),
+    export_c_func!(CGContextShowGlyphs(_, _, _)),
     export_c_func!(CGContextShowGlyphsAtPositions(_, _, _, _)),
 ];

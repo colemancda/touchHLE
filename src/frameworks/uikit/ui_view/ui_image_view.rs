@@ -29,7 +29,14 @@ pub const CLASSES: ClassExports = objc_classes! {
 @implementation UIImageView: UIView
 
 + (id)allocWithZone:(NSZonePtr)_zone {
-    let host_object = Box::<UIImageViewHostObject>::default();
+    // Local patch: as on iOS, image views don't take touches by default.
+    let host_object = Box::new(UIImageViewHostObject {
+        superclass: super::UIViewHostObject {
+            user_interaction_enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
     env.objc.alloc_object(this, host_object, &mut env.mem)
 }
 

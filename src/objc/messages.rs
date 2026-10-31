@@ -192,9 +192,91 @@ fn objc_msgSend_inner(
     }
 
     let orig_class = super2.unwrap_or_else(|| ObjC::read_isa(receiver, &env.mem));
-    assert!(orig_class != nil);
+    assert!(
+        orig_class != nil,
+        "message \"{}\" sent to {:?}, which has no class (freed or garbage object?)",
+        selector.as_str(&env.mem),
+        receiver
+    );
     if !skip_initialize {
         maybe_initialize_class(env, receiver);
+    }
+
+    // Local patch: TOUCHHLE_MSG_STATS=1 logs the most frequent messages
+    // (class + selector) every 5 seconds, to see what an app is looping on.
+    static STATS_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *STATS_ON.get_or_init(|| std::env::var_os("TOUCHHLE_MSG_STATS").is_some()) {
+        thread_local! {
+            static STATS: std::cell::RefCell<(std::time::Instant, std::collections::HashMap<String, u32>)> =
+                std::cell::RefCell::new((std::time::Instant::now(), Default::default()));
+        }
+        let key = format!(
+            "{} {}",
+            env.objc.get_class_name(orig_class),
+            selector.as_str(&env.mem)
+        );
+        let dump = STATS.with(|s| {
+            let mut s = s.borrow_mut();
+            *s.1.entry(key).or_default() += 1;
+            if s.0.elapsed().as_secs() >= 5 {
+                s.0 = std::time::Instant::now();
+                let mut v: Vec<_> = std::mem::take(&mut s.1).into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1));
+                v.truncate(25);
+                Some(v)
+            } else {
+                None
+            }
+        });
+        if let Some(v) = dump {
+            log!(
+                "MSG STATS (last 5 s): {}",
+                v.iter()
+                    .map(|(k, n)| format!("{n}x [{k}]"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    // Local patch: TOUCHHLE_MSG_TRACE=ClassA,ClassB logs messages to those classes.
+    static TRACE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let trace = TRACE.get_or_init(|| {
+        std::env::var("TOUCHHLE_MSG_TRACE")
+            .map(|v| v.split(',').map(str::to_string).collect())
+            .unwrap_or_default()
+    });
+    if !trace.is_empty() {
+        let name = env.objc.get_class_name(orig_class);
+        if trace.iter().any(|t| t == name) {
+            let sel = selector.as_str(&env.mem).to_string();
+            log!("MSG [{} {:?} {}]", name, receiver, sel);
+            // TOUCHHLE_PEEK_ON=selector TOUCHHLE_PEEK=0xADDR:f,+0xOFF:i,...
+            // logs guest memory (absolute, or relative to the receiver).
+            if std::env::var("TOUCHHLE_PEEK_ON").ok().as_deref() == Some(sel.as_str()) {
+                let spec = std::env::var("TOUCHHLE_PEEK").unwrap_or_default();
+                let mut out = String::new();
+                for item in spec.split(',').filter(|s| !s.is_empty()) {
+                    let (addr, kind) = item.split_once(':').unwrap_or((item, "i"));
+                    let (rel, hex) = match addr.strip_prefix('+') {
+                        Some(h) => (true, h),
+                        None => (false, addr),
+                    };
+                    let mut a = u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                    if rel {
+                        a = a.wrapping_add(receiver.to_bits());
+                    }
+                    let p: crate::mem::ConstPtr<u32> = crate::mem::Ptr::from_bits(a);
+                    let raw = env.mem.read(p);
+                    if kind == "f" {
+                        out += &format!(" {}={}", item, f32::from_bits(raw));
+                    } else {
+                        out += &format!(" {}={:#x}", item, raw);
+                    }
+                }
+                log!("PEEK{}", out);
+            }
+        }
     }
 
     // Traverse the chain of superclasses to find the method implementation.

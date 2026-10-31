@@ -1385,7 +1385,9 @@ pub const CLASSES: ClassExports = objc_classes! {
              length:(NSUInteger)len
            encoding:(NSStringEncoding)encoding {
     // TODO: error handling
-    let slice = env.mem.bytes_at(bytes, len);
+    // Local patch: a zero-length string may come with a null pointer (e.g. the
+    // bytes of a nil NSData); read nothing rather than fail the null check.
+    let slice: &[u8] = if len == 0 { &[] } else { env.mem.bytes_at(bytes, len) };
     let host_object = StringHostObject::decode(Cow::Borrowed(slice), encoding);
 
     *env.objc.borrow_mut(this) = host_object;
@@ -1605,7 +1607,9 @@ pub const CLASSES: ClassExports = objc_classes! {
              length:(NSUInteger)len
            encoding:(NSStringEncoding)encoding {
     // TODO: error handling
-    let slice = env.mem.bytes_at(bytes, len);
+    // Local patch: a zero-length string may come with a null pointer (e.g. the
+    // bytes of a nil NSData); read nothing rather than fail the null check.
+    let slice: &[u8] = if len == 0 { &[] } else { env.mem.bytes_at(bytes, len) };
     let host_object = StringHostObject::decode(Cow::Borrowed(slice), encoding);
 
     *env.objc.borrow_mut(this) = host_object;

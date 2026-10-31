@@ -245,6 +245,18 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
             );
             continue;
         } else {
+            // Local patch: TOUCHHLE_TOUCH_LOG=1 logs which view each new touch hits.
+            if std::env::var_os("TOUCHHLE_TOUCH_LOG").is_some() {
+                let class: crate::objc::Class = msg![env; view class];
+                let f: CGRect = msg![env; view frame];
+                log!(
+                    "Touch at {:?} hit {:?} ({}) frame {:?}",
+                    location_in_window,
+                    view,
+                    env.objc.get_class_name(class),
+                    f
+                );
+            }
             log_dbg!(
                 "Found view {:?} with frame {:?} for touch at {:?} in window {:?}",
                 view,

@@ -686,6 +686,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     release(env, object)
 }
 
+// Local patch
+- (())removeObjectsInRange:(NSRange)range {
+    let start = range.location as usize;
+    let removed: Vec<id> = env.objc.borrow_mut::<ArrayHostObject>(this).array.drain(start..start + range.length as usize).collect();
+    for object in removed {
+        release(env, object);
+    }
+}
+
 - (())replaceObjectAtIndex:(NSUInteger)index withObject:(id)obj {
     retain(env, obj);
     let object = std::mem::replace(&mut env.objc.borrow_mut::<ArrayHostObject>(this).array[index as usize], obj);

@@ -323,6 +323,13 @@ pub const CLASSES: ClassExports = objc_classes! {
         source
     } = env.objc.borrow(this);
 
+    // Local patch: objects of faked classes decode as nil; leave such outlets
+    // unset (as they start out) instead of tripping setValue:forKey:'s nil check.
+    if destination == nil || source == nil {
+        log!("Skipping nib outlet {:?} with a nil end (faked class?)", to_rust_string(env, label));
+        return;
+    }
+
     () = msg![env; source setValue:destination forKey:label];
 }
 
